@@ -6,15 +6,17 @@
 trigger: none
 
 stages:
-- stage: create_cluster
+- stage: provision_cluster
+  displayName: Provision Cluster
   jobs:
   - job: create_cluster
+    displayName: Create cluster
     pool:
       vmImage: 'ubuntu-latest'
 
     steps:
     - task: AzureCLI@2
-      displayName: Create Cluster
+      displayName: Create Kubernetes Cluster
       inputs:
         azureSubscription: clustermanagement
         scriptType: bash
@@ -73,6 +75,7 @@ stages:
             --file kubeconfig
     
   - job: connect_registry
+    displayName: Connect Trusted Registry
     pool:
       vmImage: 'ubuntu-latest'
     dependsOn: create_cluster
@@ -91,6 +94,7 @@ stages:
             jq -r .value > key.pem
 
     - task: KubectlInstaller@0
+      displayName: Install latest Kubernetes CLI
       inputs:
         kubectlVersion: latest
 
@@ -108,8 +112,10 @@ stages:
             --scope ${registryResourceId} --role acrpull
 
 - stage: attach_to_tmc
+  displayName: Attach Provisioned Cluster to TMC
   jobs:
   - job: attach_cluster
+    displayName: Attach Provisioned Cluster
     pool:
       vmImage: 'ubuntu-latest'
 
@@ -129,7 +135,7 @@ stages:
           az keyvault secret show --name $(clusterName)-kubeconfig --vault-name $(keyVault) | \
             jq -r .value > kubeconfig
 
-    - script: |
+    - bash: |
         export KUBECONFIG=./kubeconfig
         tmc login --name $(resourceGroup) --no-configure
         cluster_count=$(tmc cluster list -o json --name $(clusterName) | jq -r 'if .totalCount then .totalCount else .total_count end')
@@ -140,13 +146,15 @@ stages:
         else
           echo "Cluster $(clusterName) is already attached to TMC"
         fi
+      displayName: Attach Provisioned Cluster
       env:
         TMC_API_TOKEN: $(tmcApiToken)
 
 - stage: add_backup
+  displayName: Add TMC Data Protection to Cluster
   jobs:
   - job: create_data_protection
-
+    displayName: Add TMC Data Protection
     pool:
       vmImage: 'ubuntu-latest'
 
@@ -166,7 +174,7 @@ stages:
           az keyvault secret show --name $(clusterName)-kubeconfig --vault-name $(keyVault) | \
             jq -r .value > kubeconfig
 
-    - script: |
+    - bash: |
         tmc login --name $(resourceGroup) --no-configure
         if ! tmc cluster dataprotection get $(clusterName) ; then
           echo "Enabling data protection for cluster $(clusterName)"
@@ -174,10 +182,11 @@ stages:
         else
           echo "Data protection already enabled for cluster $(clusterName)"
         fi
+      displayName: Enable TMC Data Protection
       env:
         TMC_API_TOKEN: $(tmcApiToken)
  
-    - script: |
+    - bash: |
         export KUBECONFIG=./kubeconfig
         # wait for the CRD to be available, bail out after 10 minutes
         timeout=10*120
@@ -198,5 +207,6 @@ stages:
         else 
           echo "Nightly backup already configured"
         fi
+      displayName: Schedule Nightly Backup
       env:
         TMC_API_TOKEN: $(tmcApiToken)

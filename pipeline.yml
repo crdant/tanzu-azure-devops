@@ -16,12 +16,14 @@ resources:
 
 jobs:
 - job: maintain_clusters
+  displayName: Maintain Kubernetes Clusters
   pool:
     vmImage: 'ubuntu-latest'
 
   steps:
   - checkout: clusters
-  - script: sudo snap install yq
+  - bash: sudo snap install yq
+    displayName: Install YQ command 
   - task: AzureCLI@2
     displayName: Maintain Clusters
     inputs:
@@ -48,11 +50,14 @@ jobs:
           services_cidr="$(sudo cat ${cluster} | yq r - spec.provisionedcluster.networkConfig.serviceCidr)"
 
           echo "Kicking off cluster maintenance for cluster ${cluster_name} in resource group ${resource_group}"
-          az pipelines run --name cluster-maintenance --branch $(Build.SourceBranchName) \
+
+          set -x
+          az pipelines run --name cluster-maintenance --branch $(Build.SourceBranch) \
             --variables resourceGroup="${resource_group}" clusterName="${cluster_name}" tmcApiToken="$(tmcApiToken)" \
                         kubernetesVersion="${kubernetes_version}" location="${location}" zones="${az_list}" \
                         podCidr="${pod_cidr}" servicesCidr="${services_cidr}" sshKey="${ssh_key}" \
                         keyVault="${key_vault}" trustedRegistry="${trusted_registry}" storageLocation="${storage_location}"
+          set +x
 
           kubernetes_version=
           location=
