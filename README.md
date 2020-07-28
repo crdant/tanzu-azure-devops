@@ -21,9 +21,12 @@ There are some manual dependencies for the pipeline.
 
 ### Variables
 
-The pipeline depends on one secret variable:
+The pipeline depends on four variables you should set up when creating it:
 
-* _tmcApiToken_ An API token for TMC that is used to attach the cluster and set up data production
+* _keyVault_ The Azure Key Vault to use for storing Kubernetes configurations
+* _trustedRegistry_ Names a Azure Container Registry registry that is considered a trusted private registry for the cluster
+* _storageLocation_ Account name for a set of data protection credentials in TMC
+* _tmcApiToken_ An API token for TMC that is used to attach the cluster and set up data production, this is presumed to be a secret variable
 
 and two service connections:
 

@@ -35,9 +35,9 @@ jobs:
         export AZURE_DEVOPS_EXT_PAT=$(System.AccessToken) 
         # az devops login --organization $(System.CollectionUri)
 
-        key_vault=cluster-management
-        trusted_registry=crdanttrustedregistry
-        storage_location=crdant-data-protection
+        key_vault=$(keyVault)
+        trusted_registry=$(trustedRegistry)
+        storage_location=$(storageLocation)
         for cluster in $(ls ${cluster_dir}); do 
           cluster="${cluster_dir}/${cluster}"
           resource_group="$(sudo cat ${cluster} | yq r - objectMeta.group)"

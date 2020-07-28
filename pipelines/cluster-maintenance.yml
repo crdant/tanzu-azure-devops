@@ -120,7 +120,7 @@ stages:
       vmImage: 'ubuntu-latest'
 
     container: 
-      image: crdanttrustedregistry.azurecr.io/platform.crdant.io/tanzu-automation-toolkit:latest
+      image: $(trustedRegistry).azurecr.io/platform.crdant.io/tanzu-automation-toolkit:latest
       endpoint: trustedregistry
 
     steps:
@@ -159,7 +159,7 @@ stages:
       vmImage: 'ubuntu-latest'
 
     container: 
-      image: crdanttrustedregistry.azurecr.io/platform.crdant.io/tanzu-automation-toolkit:latest
+      image: $(trustedRegistry).azurecr.io/platform.crdant.io/tanzu-automation-toolkit:latest
       endpoint: trustedregistry
 
     steps:
