@@ -1,21 +1,17 @@
 # Introduction 
 
-A demonstration pipeline for setting up an EKS cluster attached to TMC.
+A demonstration pipeline for setting up EKS cluster attached to TMC. Clusters are 
+described in YAML format in [a separate repository](https://dev.azure.com/cdantonio/cluster-management/_git/clusters).
+There are two collaborating pipelines: a [top-level pipeline](./pipeline.yml), and
+a [child pipeline](./pipelines/cluster-maintenance.yml) that runs for each cluster 
+in the [cluster repository]($/cluster-management/clusters).
 
-# Pipeline Steps
+# Cluster Management Steps
 
 1. Create an EKS cluster
 2. Connect cluster to the trusted registry
 3. Attach that cluster to TMC
 4. Configure data protection for the cluster
-
-## Parameters
-
-* _clusterName_ A name for the cluster
-* _resourceGroup_ The resource group into which to create the cluster, for now, we presume this is also the name of the cluster group in TMC and both should already be created
-* _keyVault_ A key vault to save secrets into
-* _trustedRegistry_ A private AKS registry for the cluster to access
-* _backupLocation_ A backup location in TMC that backups should be sent to
 
 # Setup
 

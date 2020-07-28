@@ -1,0 +1,170 @@
+# Starter pipeline
+# Start with a minimal pipeline that you can customize to build and deploy your code.
+# Add steps that build, run tests, deploy, and more:
+# https://aka.ms/yaml
+
+trigger: none
+
+stages:
+- stage: create_cluster
+  jobs:
+  - job: create_cluster
+    pool:
+      vmImage: 'ubuntu-latest'
+
+    steps:
+    - task: AzureCLI@2
+      displayName: Create Cluster
+      inputs:
+        azureSubscription: clustermanagement
+        scriptType: bash
+        scriptLocation: inlineScript
+        inlineScript: |
+          # check whether or not the cluster exists, right now we just skip over this step if it doesn't
+          if ! az aks show --resource-group $(resourceGroup) --name $(clusterName) 2>&1 1> /dev/null ; then
+            echo "Creating cluster $(clusterName) in resource group $(resourceGroup)"
+            
+            cluster_options="--enable-managed-identity --network-plugin kubenet"
+            kubernetes_version=$(kubernetesVersion)
+            if [[ -n ${kubernetes_version} ]]; then
+              cluster_options="${cluster_options} --kubernetes-version ${kubernetes_version}"
+            fi
+
+            location=$(location)
+            if [[ -n ${location} ]]; then
+              cluster_options="${cluster_options} --location ${location}"
+            fi
+
+            zones="$(zones)"
+            if [[ -n ${zones} ]]; then
+              cluster_options="${cluster_options} --zones ${zones}"
+            fi
+
+            pod_cidr=$(podCidr)
+            if [[ -n ${pod_cidr} ]]; then
+              cluster_options="${cluster_options} --pod-cidr ${pod_cidr}"
+            fi
+
+            service_cidr=$(servicesCidr)
+            if [[ -n ${service} ]]; then
+              cluster_options="${cluster_options} --service-cidr ${service_cidr}"
+            fi
+
+            ssh_key="$(sshKey)"
+            if [[ -n "${ssh_key}" ]]; then
+              echo "${ssh_key}" > key.pub
+              cluster_options="${cluster_options} --ssh-key-value ./key.pub"
+            fi
+
+            az aks create --resource-group $(resourceGroup) --name $(clusterName) ${cluster_options}
+          else
+            echo "Cluster $(clusterName) in resource group $(resourceGroup) has already been created."
+          fi
+
+    - task: AzureCLI@2
+      displayName: Store Credentials
+      inputs:
+        azureSubscription: clustermanagement
+        scriptType: bash
+        scriptLocation: inlineScript
+        inlineScript: |
+          az aks get-credentials --resource-group $(resourceGroup) --name $(clusterName) --file kubeconfig
+          az keyvault secret set --name $(clusterName)-kubeconfig --vault-name $(keyVault) \
+            --file kubeconfig
+    
+  - job: connect_registry
+    pool:
+      vmImage: 'ubuntu-latest'
+    dependsOn: create_cluster
+
+    steps:    
+    - task: AzureCLI@2
+      displayName: Fetch Private Key
+      inputs:
+        azureSubscription: clustermanagement
+        scriptType: bash
+        scriptLocation: inlineScript
+        inlineScript: |
+          az keyvault secret show --name $(clusterName)-kubeconfig --vault-name $(keyVault) | \
+            jq -r .value > kubeconfig
+          az keyvault secret show --name $(clusterName)-private-key --vault-name $(keyVault) | \
+            jq -r .value > key.pem
+
+    - task: KubectlInstaller@0
+      inputs:
+        kubectlVersion: latest
+
+    - task: AzureCLI@2
+      displayName: Configure Registry Connection
+      inputs:
+        azureSubscription: clustermanagement
+        scriptType: bash
+        scriptLocation: inlineScript
+        inlineScript: |
+          clusterIdentity=$(az aks show --resource-group $(resourceGroup) --name $(clusterName) --query identityProfile.kubeletidentity.objectId --output tsv)
+          registryResourceId=$(az acr show --resource-group $(resourceGroup) --name $(trustedRegistry) --query id --output tsv)
+          echo "Setting up access to registry $(trustedRegistry) for cluster $(clusterName) in resource group $(resourceGroup)"
+          az role assignment create --assignee-object-id ${clusterIdentity} \
+            --scope ${registryResourceId} --role acrpull
+
+- stage: attach_to_tmc
+  jobs:
+  - job: attach_cluster
+    pool:
+      vmImage: 'ubuntu-latest'
+
+    container: 
+      image: crdanttrustedregistry.azurecr.io/platform.crdant.io/tanzu-automation-toolkit:latest
+      endpoint: trustedregistry
+
+    steps:
+    - task: AzureCLI@2
+      displayName: Fetch Credentials
+      target: host
+      inputs:
+        azureSubscription: clustermanagement
+        scriptType: bash
+        scriptLocation: inlineScript
+        inlineScript: |
+          az keyvault secret show --name $(clusterName)-kubeconfig --vault-name $(keyVault) | \
+            jq -r .value > kubeconfig
+
+    - script: |
+        export KUBECONFIG=./kubeconfig
+        echo "resource group: " $(resourceGroup)
+        tmc login --name $(resourceGroup) --no-configure
+        cluster_count=$(tmc cluster list -o json --name $(clusterName) | jq -r 'if .totalCount then .totalCount else .total_count end')
+        if [[ cluster_count -eq 0 ]]; then
+          echo "Attaching cluster $(clusterName) to TMC in cluster group $(resourceGroup)"
+          tmc cluster attach --name $(clusterName) --group $(resourceGroup)
+          kubectl apply -f k8s-attach-manifest.yaml
+        else
+          echo "Cluster $(clusterName) is already attached to TMC"
+        fi
+      env:
+        TMC_API_TOKEN: $(tmcApiToken)
+
+- stage: add_backup
+  jobs:
+  - job: create_data_protection
+
+    pool:
+      vmImage: 'ubuntu-latest'
+
+    container: 
+      image: crdanttrustedregistry.azurecr.io/platform.crdant.io/tanzu-automation-toolkit:latest
+      endpoint: trustedregistry
+
+    steps:
+    - script: |
+        tmc login --name $(resourceGroup) --no-configure
+        if ! tmc cluster dataprotection get $(clusterName) ; then
+          echo "Enabling data protection for cluster $(clusterName)"
+          tmc cluster dataprotection create --cluster-name $(clusterName) --backup-location-name $(backupLocation)
+        else
+          echo "Data protection already enabled for cluster $(clusterName)"
+        fi
+
+      env:
+        TMC_API_TOKEN: $(tmcApiToken)
+ 

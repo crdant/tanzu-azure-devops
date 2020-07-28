@@ -3,157 +3,61 @@
 # Add steps that build, run tests, deploy, and more:
 # https://aka.ms/yaml
 
-trigger: none
+resources:
+  repositories:
+  - repository: clusters
+    name: clusters
+    type: git
+    ref: main
+    trigger: 
+      branches:
+        include: 
+        - main
 
-parameters:
-- name: resourceGroup
-  displayName: Resource Group
-  type: string
-- name: clusterName
-  displayName: Cluster Name
-  type: string
-- name: keyVault
-  displayName: Key Vault
-  type: string
-- name: trustedRegistry
-  displayName: Trusted Registry
-  type: string
-- name: backupLocation
-  displayName: Backup Location
-  type: string
+jobs:
+- job: maintain_clusters
+  pool:
+    vmImage: 'ubuntu-latest'
 
-stages:
-- stage: create_cluster
-  jobs:
-  - job: create_cluster
-    pool:
-      vmImage: 'ubuntu-latest'
+  steps:
+  - checkout: clusters
+  - script: sudo snap install yq
+  - task: AzureCLI@2
+    displayName: Maintain Clusters
+    inputs:
+      azureSubscription: clustermanagement
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        cluster_dir=$(Build.SourcesDirectory)/data
+        export AZURE_DEVOPS_EXT_PAT=$(System.AccessToken) 
+        # az devops login --organization $(System.CollectionUri)
 
-    steps:
-    - task: AzureCLI@2
-      displayName: Create Cluster
-      inputs:
-        azureSubscription: clustermanagement
-        scriptType: bash
-        scriptLocation: inlineScript
-        inlineScript: |
-          # check whether or not the cluster exists, right now we just skip over this step if it doesn't
-          if ! az aks show --resource-group ${{parameters.resourceGroup}} --name ${{parameters.clusterName}} 2>&1 1> /dev/null ; then
+        key_vault=cluster-management
+        trusted_registry=crdanttrustedregistry
+        backup_location=crdant-data-protection
+        for cluster in $(ls ${cluster_dir}); do 
+          cluster="${cluster_dir}/${cluster}"
+          resource_group="$(sudo cat ${cluster} | yq r - objectMeta.group)"
+          cluster_name="$(sudo cat ${cluster} | yq r - fullName.name)"
+          kubernetes_version="$(sudo cat ${cluster} | yq r - spec.provisionedcluster.version)"
+          location="$(sudo cat ${cluster} | yq r - spec.provisionedcluster.cloudProviderConfig.azureConfig.location)"
+          az_list="$(sudo cat ${cluster} | yq -j r - spec.provisionedcluster.cloudProviderConfig.azureConfig.azList |  sed -e 's/,/ /g' -e 's/[^0-9 ]*//g')"
+          ssh_key="$(sudo cat ${cluster} | yq r - spec.provisionedcluster.cloudProviderConfig.azureConfig.sshKey)"
+          pod_cidr="$(sudo cat ${cluster} | yq r - spec.provisionedcluster.networkConfig.podCidr)"
+          services_cidr="$(sudo cat ${cluster} | yq r - spec.provisionedcluster.networkConfig.serviceCidr)"
 
-            # do a similar check before creating an SSH key with a similarly naive response to its existence
-            if ! az keyvault secret show --name ${{parameters.clusterName}}-ssh-key --vault-name ${{parameters.keyVault}} 2>&1 1>/dev/null ; then
-              ssh-keygen -t rsa -b 4096 -o -a 100 -f key -N ""
-              az keyvault secret set --name ${{parameters.clusterName}}-private-key --vault-name ${{parameters.keyVault}} --file key
-              rm key
-            fi
+          echo "Kicking off cluster maintenance for cluster ${cluster_name} in resource group ${resource_group}"
+          az pipelines run --name cluster-maintenance --branch cluster-repository \
+            --variables resourceGroup="${resource_group}" clusterName="${cluster_name}" tmcApiToken="$(tmcApiToken)" \
+                        kubernetesVersion="${kubernetes_version}" location="${location}" zones="${az_list}" \
+                        podCidr="${pod_cidr}" servicesCidr="${services_cidr}" sshKey="${ssh_key}" \
+                        keyVault="${key_vault}" trustedRegistry="${trusted_registry}" backupLocation="${backup_location}"
 
-            # create the cluster
-            az aks create --resource-group ${{parameters.resourceGroup}} --name ${{parameters.clusterName}} \
-              --ssh-key-value key.pub --enable-managed-identity
-          else
-            echo "Cluster exists"
-          fi
-
-    - task: AzureCLI@2
-      displayName: Store Credentials
-      inputs:
-        azureSubscription: clustermanagement
-        scriptType: bash
-        scriptLocation: inlineScript
-        inlineScript: |
-          az aks get-credentials --resource-group ${{parameters.resourceGroup}} --name ${{parameters.clusterName}} --file kubeconfig
-          az keyvault secret set --name ${{parameters.clusterName}}-kubeconfig --vault-name ${{parameters.keyVault}} \
-            --file kubeconfig
-    
-  - job: connect_registry
-    pool:
-      vmImage: 'ubuntu-latest'
-    dependsOn: create_cluster
-
-    steps:    
-    - task: AzureCLI@2
-      displayName: Fetch Private Key
-      inputs:
-        azureSubscription: clustermanagement
-        scriptType: bash
-        scriptLocation: inlineScript
-        inlineScript: |
-          az keyvault secret show --name ${{parameters.clusterName}}-kubeconfig --vault-name ${{parameters.keyVault}} | \
-            jq -r .value > kubeconfig
-          az keyvault secret show --name ${{parameters.clusterName}}-private-key --vault-name ${{parameters.keyVault}} | \
-            jq -r .value > key.pem
-
-    - task: KubectlInstaller@0
-      inputs:
-        kubectlVersion: latest
-
-    - task: AzureCLI@2
-      displayName: Configure Registry Connection
-      inputs:
-        azureSubscription: clustermanagement
-        scriptType: bash
-        scriptLocation: inlineScript
-        inlineScript: |
-          clusterIdentity=$(az aks show --resource-group ${{parameters.resourceGroup}} --name ${{parameters.clusterName}} --query identityProfile.kubeletidentity.objectId --output tsv)
-          registryResourceId=$(az acr show --resource-group ${{parameters.resourceGroup}} --name ${{parameters.trustedRegistry}} --query id --output tsv)
-          az role assignment create --assignee-object-id ${clusterIdentity} \
-            --scope ${registryResourceId} --role acrpull
-
-- stage: attach_to_tmc
-  jobs:
-  - job: attach_cluster
-    pool:
-      vmImage: 'ubuntu-latest'
-
-    container: 
-      image: crdanttrustedregistry.azurecr.io/platform.crdant.io/tanzu-automation-toolkit:latest
-      endpoint: trustedregistry
-
-    steps:
-    - task: AzureCLI@2
-      displayName: Fetch Credentials
-      target: host
-      inputs:
-        azureSubscription: clustermanagement
-        scriptType: bash
-        scriptLocation: inlineScript
-        inlineScript: |
-          az keyvault secret show --name ${{parameters.clusterName}}-kubeconfig --vault-name ${{parameters.keyVault}} | \
-            jq -r .value > kubeconfig
-
-    - script: |
-        export KUBECONFIG=./kubeconfig
-        tmc login --name ${{parameters.resourceGroup}} --no-configure
-        cluster_count=$(tmc cluster list -o json --name ${{parameters.clusterName}} | jq -r 'if .totalCount then .totalCount else .total_count end')
-        if [[ cluster_count -eq 0 ]]; then
-          tmc cluster attach --name ${{parameters.clusterName}}
-          kubectl apply -f k8s-attach-manifest.yaml
-        else
-          echo "Cluster ${{parameters.clusterName}} already attached"
-        fi
-      env:
-        TMC_API_TOKEN: $(tmcApiToken)
-
-- stage: add_backup
-  jobs:
-  - job: create_data_protection
-
-    pool:
-      vmImage: 'ubuntu-latest'
-
-    container: 
-      image: crdanttrustedregistry.azurecr.io/platform.crdant.io/tanzu-automation-toolkit:latest
-      endpoint: trustedregistry
-
-    steps:
-    - script: |
-        tmc login --name ${{parameters.resourceGroup}} --no-configure
-        if ! tmc cluster dataprotection get ${{parameters.clusterName}} ; then
-          tmc cluster dataprotection create --cluster-name ${{parameters.clusterName}} --backup-location-name ${{parameters.backupLocation}}
-        else
-          echo "Data protection already enabled for cluster ${{parameters.clusterName}}"
-        fi
-
-      env:
-        TMC_API_TOKEN: $(tmcApiToken)
- 
+          kubernetes_version=
+          location=
+          az_list=
+          ssh_key=
+          pod_cidr=
+          services_cidr=
+        done
