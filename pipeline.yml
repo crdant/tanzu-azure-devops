@@ -35,7 +35,7 @@ jobs:
 
         key_vault=cluster-management
         trusted_registry=crdanttrustedregistry
-        backup_location=crdant-data-protection
+        storage_location=crdant-data-protection
         for cluster in $(ls ${cluster_dir}); do 
           cluster="${cluster_dir}/${cluster}"
           resource_group="$(sudo cat ${cluster} | yq r - objectMeta.group)"
@@ -48,11 +48,11 @@ jobs:
           services_cidr="$(sudo cat ${cluster} | yq r - spec.provisionedcluster.networkConfig.serviceCidr)"
 
           echo "Kicking off cluster maintenance for cluster ${cluster_name} in resource group ${resource_group}"
-          az pipelines run --name cluster-maintenance --branch cluster-repository \
+          az pipelines run --name cluster-maintenance --branch $(Build.SourceBranchName) \
             --variables resourceGroup="${resource_group}" clusterName="${cluster_name}" tmcApiToken="$(tmcApiToken)" \
                         kubernetesVersion="${kubernetes_version}" location="${location}" zones="${az_list}" \
                         podCidr="${pod_cidr}" servicesCidr="${services_cidr}" sshKey="${ssh_key}" \
-                        keyVault="${key_vault}" trustedRegistry="${trusted_registry}" backupLocation="${backup_location}"
+                        keyVault="${key_vault}" trustedRegistry="${trusted_registry}" storageLocation="${storage_location}"
 
           kubernetes_version=
           location=
