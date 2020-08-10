@@ -178,7 +178,7 @@ stages:
         tmc login --name $(resourceGroup) --no-configure
         if ! tmc cluster dataprotection get $(clusterName) ; then
           echo "Enabling data protection for cluster $(clusterName)"
-          tmc cluster dataprotection create --cluster-name $(clusterName) --backup-location-name $(backupLocation)
+          tmc cluster dataprotection create --cluster-name $(clusterName) --backup-location-name $(storageLocation)
         else
           echo "Data protection already enabled for cluster $(clusterName)"
         fi
