@@ -1,0 +1,5 @@
+secrets/*
+!secrets/*.enc
+work/*
+!work/README.md
+.DS_Store
